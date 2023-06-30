@@ -1,0 +1,54 @@
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: "mraee-capi-rosa"
+  namespace: clusters-demo
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+      - 192.168.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: ROSAControlPlane
+    name: "mraee-capi-rosa"
+    namespace: clusters-demo
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+    kind: ROSACluster
+    name: "mraee-capi-rosa"
+    namespace: clusters-demo
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta2
+kind: ROSACluster
+metadata:
+  name: "mraee-capi-rosa"
+  namespace: clusters-demo
+spec: {}
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: ROSAControlPlane
+metadata:
+  name: "mraee-capi-rosa"
+  namespace: clusters-demo
+spec:
+  version: "openshift-v4.12.15"
+  region: "us-west-2"
+  machineCIDR: "10.0.0.0/16"
+  rolesRef:
+    ingressARN: "arn:aws:iam::820196288204:role/agl-capi-openshift-ingress-operator-cloud-credentials"
+    imageRegistryARN: "arn:aws:iam::820196288204:role/agl-capi-openshift-image-registry-installer-cloud-credentials"
+    storageARN: "arn:aws:iam::820196288204:role/agl-capi-openshift-cluster-csi-drivers-ebs-cloud-credentials"
+    networkARN: "arn:aws:iam::820196288204:role/agl-capi-openshift-cloud-network-config-controller-cloud-credent"
+    kubeCloudControllerARN: "arn:aws:iam::820196288204:role/agl-capi-kube-system-kube-controller-manager"
+    nodePoolManagementARN: "arn:aws:iam::820196288204:role/agl-capi-kube-system-capa-controller-manager"
+    controlPlaneOperatorARN: "arn:aws:iam::820196288204:role/agl-capi-kube-system-control-plane-operator"
+    kmsProviderARN: "arn:aws:iam::820196288204:role/agl-capi-kube-system-kms-provider"
+  oidcID: "23tkhlivljmliuunnd5stsf5paat1jku"
+  subnets:
+    - "subnet-0b54a15087a41ff76"
+    - "subnet-05e7e3468d32f2f2a"
+  accountID: "820196288204"
+  creatorARN: "arn:aws:iam::820196288204:user/mraee-dev"
+  installerRoleARN: "arn:aws:iam::820196288204:role/ManagedOpenShift-Installer-Role"
+  supportRoleARN: "arn:aws:iam::820196288204:role/ManagedOpenShift-Support-Role"

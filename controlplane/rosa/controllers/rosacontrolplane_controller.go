@@ -19,11 +19,14 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
+
 	sdk "github.com/openshift-online/ocm-sdk-go"
 	cmv1 "github.com/openshift-online/ocm-sdk-go/clustersmgmt/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"os"
 	infrav1 "sigs.k8s.io/cluster-api-provider-aws/v2/api/v1beta2"
 	rosacontrolplanev1 "sigs.k8s.io/cluster-api-provider-aws/v2/controlplane/rosa/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/cloud/scope"
@@ -39,8 +42,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"strings"
-	"time"
 )
 
 const (
@@ -264,8 +265,8 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 	stsBuilder = stsBuilder.OperatorIAMRoles(roles...)
 
 	instanceIAMRolesBuilder := cmv1.NewInstanceIAMRoles()
-	instanceIAMRolesBuilder.MasterRoleARN("TODO")
-	instanceIAMRolesBuilder.WorkerRoleARN("TODO")
+	instanceIAMRolesBuilder.MasterRoleARN(rosaScope.ControlPlane.Spec.RolesRef.NodePoolManagementARN)
+	instanceIAMRolesBuilder.WorkerRoleARN(rosaScope.ControlPlane.Spec.RolesRef.NodePoolManagementARN)
 	stsBuilder = stsBuilder.InstanceIAMRoles(instanceIAMRolesBuilder)
 	stsBuilder.OidcConfig(cmv1.NewOidcConfig().ID(*rosaScope.ControlPlane.Spec.OIDCID))
 
@@ -303,7 +304,7 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 	connection, err := sdk.NewConnectionBuilder().
 		Logger(ocmLogger).
 		Tokens(token).
-		URL("https://api.stage.openshift.com").
+		URL("https://api.openshift.com").
 		Build()
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to build connection: %w", err)
