@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/arn"
 	sdk "github.com/openshift-online/ocm-sdk-go"
 	cmv1 "github.com/openshift-online/ocm-sdk-go/clustersmgmt/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,11 +41,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
+	ocmAPIUrl              = "https://api.openshift.com"
+	RosaCreatorArnProperty = "rosa_creator_arn"
+
 	rosaControlPlaneKind = "ROSAControlPlane"
 	// ROSAControlPlaneFinalizer allows the controller to clean up resources on delete.
 	ROSAControlPlaneFinalizer = "rosacontrolplane.controlplane.cluster.x-k8s.io"
@@ -140,7 +143,7 @@ func (r *ROSAControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		ControllerName: strings.ToLower(rosaControlPlaneKind),
 	})
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to create scope: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to create scope: %w", err)
 	}
 
 	// Always close the scope
@@ -272,6 +275,13 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 
 	stsBuilder.AutoMode(true)
 
+	// extract accountID from creator ARN instead of requiring it in spec
+	parsedArn, err := arn.Parse(*rosaScope.ControlPlane.Spec.CreatorARN)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	rosaScope.ControlPlane.Spec.AccountID = &parsedArn.AccountID
+
 	awsBuilder := cmv1.NewAWS().
 		AccountID(*rosaScope.ControlPlane.Spec.AccountID)
 	awsBuilder = awsBuilder.SubnetIDs(rosaScope.ControlPlane.Spec.Subnets...)
@@ -283,12 +293,12 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 	clusterBuilder = clusterBuilder.Nodes(clusterNodesBuilder)
 
 	clusterProperties := map[string]string{}
-	clusterProperties["rosa_creator_arn"] = *rosaScope.ControlPlane.Spec.CreatorARN
+	clusterProperties[RosaCreatorArnProperty] = *rosaScope.ControlPlane.Spec.CreatorARN
 
 	clusterBuilder = clusterBuilder.Properties(clusterProperties)
 	clusterSpec, err := clusterBuilder.Build()
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to create description of cluster: %v", err)
+		return ctrl.Result{}, fmt.Errorf("failed to create description of cluster: %v", err)
 	}
 
 	// Create a logger that has the debug level enabled:
@@ -296,7 +306,7 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 		Debug(true).
 		Build()
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to build logger: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to build logger: %w", err)
 	}
 
 	// Create the connection, and remember to close it:
@@ -304,10 +314,10 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 	connection, err := sdk.NewConnectionBuilder().
 		Logger(ocmLogger).
 		Tokens(token).
-		URL("https://api.openshift.com").
+		URL(ocmAPIUrl).
 		Build()
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("failed to build connection: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to build connection: %w", err)
 	}
 	defer connection.Close()
 
@@ -319,13 +329,13 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 		Send()
 	if err != nil {
 		log.Info("error", "error", err)
-		return reconcile.Result{RequeueAfter: 10 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	clusterObject := cluster.Body()
 	log.Info("result", "body", clusterObject)
 
-	return reconcile.Result{}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ROSAControlPlaneReconciler) reconcileDelete(ctx context.Context, rosaScope *scope.ROSAControlPlaneScope) (_ ctrl.Result, reterr error) {
@@ -337,9 +347,46 @@ func (r *ROSAControlPlaneReconciler) reconcileDelete(ctx context.Context, rosaSc
 
 	// TODO: Implement OCM Delete
 
+	// Create a logger that has the debug level enabled:
+	ocmLogger, err := sdk.NewGoLoggerBuilder().
+		Debug(true).
+		Build()
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to build logger: %w", err)
+	}
+
+	// Create the connection, and remember to close it:
+	token := os.Getenv("OCM_TOKEN")
+	connection, err := sdk.NewConnectionBuilder().
+		Logger(ocmLogger).
+		Tokens(token).
+		URL(ocmAPIUrl).
+		Build()
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to build connection: %w", err)
+	}
+	defer connection.Close()
+
+	cluster, err := r.getCluster(rosaScope, connection)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	response, err := connection.ClustersMgmt().V1().Clusters().
+		Cluster(cluster.ID()).
+		Delete().
+		Send()
+	if err != nil {
+		msg := response.Error().Reason()
+		if msg == "" {
+			msg = err.Error()
+		}
+		return ctrl.Result{}, fmt.Errorf(msg)
+	}
+
 	controllerutil.RemoveFinalizer(controlPlane, ROSAControlPlaneFinalizer)
 
-	return reconcile.Result{}, nil
+	return ctrl.Result{}, nil
 }
 
 func (r *ROSAControlPlaneReconciler) rosaClusterToROSAControlPlane(ctx context.Context, log *logger.Logger) handler.MapFunc {
@@ -380,4 +427,41 @@ func (r *ROSAControlPlaneReconciler) rosaClusterToROSAControlPlane(ctx context.C
 			},
 		}
 	}
+}
+
+func (r *ROSAControlPlaneReconciler) getCluster(rosaScope *scope.ROSAControlPlaneScope, ocmConnection *sdk.Connection) (*cmv1.Cluster, error) {
+	clusterKey := rosaScope.ControlPlane.Name
+	query := fmt.Sprintf("%s AND (id = '%s' OR name = '%s' OR external_id = '%s')",
+		getClusterFilter(rosaScope),
+		clusterKey, clusterKey, clusterKey,
+	)
+	response, err := ocmConnection.ClustersMgmt().V1().Clusters().List().
+		Search(query).
+		Page(1).
+		Size(1).
+		Send()
+	if err != nil {
+		return nil, err
+	}
+
+	switch response.Total() {
+	case 0:
+		return nil, fmt.Errorf("there is no cluster with identifier or name '%s'", clusterKey)
+	case 1:
+		return response.Items().Slice()[0], nil
+	default:
+		return nil, fmt.Errorf("there are %d clusters with identifier or name '%s'", response.Total(), clusterKey)
+	}
+}
+
+// Generate a query that filters clusters running on the current AWS session account
+func getClusterFilter(rosaScope *scope.ROSAControlPlaneScope) string {
+	filter := "product.id = 'rosa'"
+	if rosaScope.ControlPlane.Spec.CreatorARN != nil {
+		filter = fmt.Sprintf("%s AND (properties.%s = '%s')",
+			filter,
+			RosaCreatorArnProperty,
+			*rosaScope.ControlPlane.Spec.CreatorARN)
+	}
+	return filter
 }
