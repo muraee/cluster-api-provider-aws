@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -48,6 +49,7 @@ import (
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/logger"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/rosa"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	expclusterv1 "sigs.k8s.io/cluster-api/exp/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
 	capiannotations "sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -109,7 +111,8 @@ func (r *ROSAControlPlaneReconciler) SetupWithManager(ctx context.Context, mgr c
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters;clusters/status,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments,verbs=get;list;watch
-// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinepools,verbs=create;get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=rosamachinepools,verbs=create;get;list;watch
 // +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=rosacontrolplanes,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=rosacontrolplanes/status,verbs=get;update;patch
 
@@ -231,6 +234,10 @@ func (r *ROSAControlPlaneReconciler) reconcileNormal(ctx context.Context, rosaSc
 			if err := r.reconcileClusterVersion(rosaScope, rosaClient, cluster); err != nil {
 				return ctrl.Result{}, err
 			}
+			if err := r.reconcileDefaultMachinePool(ctx, rosaScope, rosaClient); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to reconcile default rosamachinepool: %w", err)
+			}
+
 			return ctrl.Result{}, nil
 		case cmv1.ClusterStateError:
 			errorMessage := cluster.Status().ProvisionErrorMessage()
@@ -577,6 +584,91 @@ func validateControlPlaneSpec(rosaClient *rosa.RosaClient, rosaScope *scope.ROSA
 
 	// TODO: add more input validations
 	return nil, nil
+}
+
+func (r *ROSAControlPlaneReconciler) reconcileDefaultMachinePool(ctx context.Context, rosaScope *scope.ROSAControlPlaneScope, rosaClient *rosa.RosaClient) error {
+	nodePoolsList, err := rosaClient.GetNodePools(*rosaScope.ControlPlane.Status.ID)
+	if err != nil {
+		return err
+	}
+
+	var defaultNodePool *cmv1.NodePool
+	for _, nodePool := range nodePoolsList {
+		if nodePool.ID() == rosa.DefaultNodePoolID {
+			defaultNodePool = nodePool
+		}
+	}
+	if defaultNodePool == nil {
+		return nil
+	}
+
+	rosaMachinePool := &expinfrav1.ROSAMachinePool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%s", rosaScope.Name(), defaultNodePool.ID()),
+			Namespace: rosaScope.Namespace(),
+		},
+		Spec: expinfrav1.RosaMachinePoolSpec{
+			NodePoolName:     defaultNodePool.ID(),
+			Version:          defaultNodePool.Version().RawID(),
+			AutoRepair:       defaultNodePool.AutoRepair(),
+			AvailabilityZone: defaultNodePool.AvailabilityZone(),
+			Subnet:           defaultNodePool.Subnet(),
+			InstanceType:     defaultNodePool.AWSNodePool().InstanceType(),
+			Labels:           defaultNodePool.Labels(),
+		},
+	}
+	if autoScaling := defaultNodePool.Autoscaling(); autoScaling != nil {
+		rosaMachinePool.Spec.Autoscaling = &expinfrav1.RosaMachinePoolAutoScaling{
+			MinReplicas: autoScaling.MinReplica(),
+			MaxReplicas: autoScaling.MaxReplica(),
+		}
+	}
+
+	if err := rosaScope.Client.Get(ctx, client.ObjectKeyFromObject(rosaMachinePool), &expinfrav1.ROSAMachinePool{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		// rosamachinepool doesn't exist, create new one
+		if err := rosaScope.Client.Create(ctx, rosaMachinePool); err != nil {
+			return fmt.Errorf("failed to create default rosamachinepool: %w", err)
+		}
+	}
+
+	machinePool := &expclusterv1.MachinePool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rosaMachinePool.Name,
+			Namespace: rosaScope.Namespace(),
+		},
+		Spec: expclusterv1.MachinePoolSpec{
+			ClusterName: rosaScope.Cluster.Name,
+			Replicas:    ptr.To[int32](int32(defaultNodePool.Replicas())),
+			Template: clusterv1.MachineTemplateSpec{
+				Spec: clusterv1.MachineSpec{
+					ClusterName: rosaScope.Cluster.Name,
+					Bootstrap: clusterv1.Bootstrap{
+						DataSecretName: ptr.To(""),
+					},
+					InfrastructureRef: corev1.ObjectReference{
+						Name:       rosaMachinePool.Name,
+						Kind:       "ROSAMachinePool",
+						APIVersion: expinfrav1.GroupVersion.String(),
+					},
+				},
+			},
+		},
+	}
+
+	if err := rosaScope.Client.Get(ctx, client.ObjectKeyFromObject(machinePool), &expclusterv1.MachinePool{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		// machinepool doesn't exist, create new one
+		if err := rosaScope.Client.Create(ctx, machinePool); err != nil {
+			return fmt.Errorf("failed to create default machinepool: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (r *ROSAControlPlaneReconciler) rosaClusterToROSAControlPlane(log *logger.Logger) handler.MapFunc {

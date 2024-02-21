@@ -97,6 +97,7 @@ rules:
   resources:
   - machinepools
   verbs:
+  - create
   - get
   - list
   - watch
@@ -403,6 +404,7 @@ rules:
   resources:
   - rosamachinepools
   verbs:
+  - create
   - delete
   - get
   - list

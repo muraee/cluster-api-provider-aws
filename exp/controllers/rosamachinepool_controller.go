@@ -268,10 +268,7 @@ func (r *ROSAMachinePoolReconciler) reconcileNormal(ctx context.Context,
 	return ctrl.Result{}, nil
 }
 
-func (r *ROSAMachinePoolReconciler) reconcileDelete(
-	ctx context.Context, machinePoolScope *scope.RosaMachinePoolScope,
-	rosaControlPlaneScope *scope.ROSAControlPlaneScope,
-) error {
+func (r *ROSAMachinePoolReconciler) reconcileDelete(ctx context.Context, machinePoolScope *scope.RosaMachinePoolScope, rosaControlPlaneScope *scope.ROSAControlPlaneScope) error {
 	machinePoolScope.Info("Reconciling deletion of RosaMachinePool")
 
 	rosaClient, err := rosa.NewRosaClient(ctx, rosaControlPlaneScope)
@@ -284,7 +281,7 @@ func (r *ROSAMachinePoolReconciler) reconcileDelete(
 	if err != nil {
 		return err
 	}
-	if found {
+	if found && nodePool.ID() != rosa.DefaultNodePoolID {
 		if err := rosaClient.DeleteNodePool(*machinePoolScope.ControlPlane.Status.ID, nodePool.ID()); err != nil {
 			return err
 		}
