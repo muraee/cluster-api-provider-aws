@@ -68,6 +68,13 @@ func (t Tags) Merge(other Tags) {
 	}
 }
 
+// Substract removes out tags from other.
+func (t Tags) Substract(other Tags) {
+	for key := range other {
+		delete(t, key)
+	}
+}
+
 // Validate checks if tags are valid for the AWS API/Resources.
 // Keys must have at least 1 and max 128 characters.
 // Values must be max 256 characters long.

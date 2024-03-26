@@ -68,8 +68,9 @@ func (r *ROSAMachinePool) ValidateUpdate(old runtime.Object) (warnings admission
 		allErrs = append(allErrs, err)
 	}
 
+	allErrs = append(allErrs, r.Spec.AdditionalTags.Validate()...)
+
 	allErrs = append(allErrs, validateImmutable(oldPool.Spec.AdditionalSecurityGroups, r.Spec.AdditionalSecurityGroups, "additionalSecurityGroups")...)
-	allErrs = append(allErrs, validateImmutable(oldPool.Spec.AdditionalTags, r.Spec.AdditionalTags, "additionalTags")...)
 
 	if len(allErrs) == 0 {
 		return nil, nil

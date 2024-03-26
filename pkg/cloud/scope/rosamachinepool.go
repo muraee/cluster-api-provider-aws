@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/cluster-api-provider-aws/v2/api/v1beta2"
+	infrav1 "sigs.k8s.io/cluster-api-provider-aws/v2/api/v1beta2"
 	rosacontrolplanev1 "sigs.k8s.io/cluster-api-provider-aws/v2/controlplane/rosa/api/v1beta2"
 	expinfrav1 "sigs.k8s.io/cluster-api-provider-aws/v2/exp/api/v1beta2"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/cloud"
@@ -177,6 +178,19 @@ func (s *RosaMachinePoolScope) Session() awsclient.ConfigProvider {
 // IdentityRef implements cloud.SessionMetadata.
 func (s *RosaMachinePoolScope) IdentityRef() *v1beta2.AWSIdentityReference {
 	return s.ControlPlane.Spec.IdentityRef
+}
+
+// AdditionalTags returns the combined AdditionalTags from the scope's ROSAMachinePool and ROSAControlPlane
+// The returned value will never be nil.
+func (s *RosaMachinePoolScope) AdditionalTags() infrav1.Tags {
+	tags := make(infrav1.Tags)
+
+	// Start with the cluster-wide tags...
+	tags.Merge(s.ControlPlane.Spec.AdditionalTags)
+	// ... and merge in the Machine's
+	tags.Merge(s.RosaMachinePool.Spec.AdditionalTags)
+
+	return tags
 }
 
 // InfraClusterName implements cloud.SessionMetadata.

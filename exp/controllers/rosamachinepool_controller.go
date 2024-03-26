@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/ec2/ec2iface"
 	"github.com/blang/semver"
 	"github.com/google/go-cmp/cmp"
 	cmv1 "github.com/openshift-online/ocm-sdk-go/clustersmgmt/v1"
@@ -16,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -27,9 +29,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	infrav1 "sigs.k8s.io/cluster-api-provider-aws/v2/api/v1beta2"
 	rosacontrolplanev1 "sigs.k8s.io/cluster-api-provider-aws/v2/controlplane/rosa/api/v1beta2"
 	expinfrav1 "sigs.k8s.io/cluster-api-provider-aws/v2/exp/api/v1beta2"
+	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/cloud/converters"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/cloud/scope"
+	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/cloud/tags"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/logger"
 	"sigs.k8s.io/cluster-api-provider-aws/v2/pkg/rosa"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -226,6 +231,8 @@ func (r *ROSAMachinePoolReconciler) reconcileNormal(ctx context.Context,
 		}
 
 		currentReplicas := int32(nodePool.Status().CurrentReplicas())
+		rosaMachinePool.Status.Replicas = currentReplicas
+
 		if annotations.ReplicasManagedByExternalAutoscaler(machinePool) {
 			// Set MachinePool replicas to rosa autoscaling replicas
 			if *machinePool.Spec.Replicas != currentReplicas {
@@ -238,11 +245,12 @@ func (r *ROSAMachinePoolReconciler) reconcileNormal(ctx context.Context,
 				}
 			}
 		}
-		if err := r.reconcileProviderIDList(ctx, machinePoolScope, nodePool); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to reconcile ProviderIDList: %w", err)
-		}
 
-		rosaMachinePool.Status.Replicas = currentReplicas
+		conditions.MarkFalse(rosaMachinePool,
+			expinfrav1.RosaMachinePoolReadyCondition,
+			nodePool.Status().Message(),
+			clusterv1.ConditionSeverityInfo, "")
+		rosaMachinePool.Status.Ready = false
 		if rosa.IsNodePoolReady(nodePool) {
 			conditions.MarkTrue(rosaMachinePool, expinfrav1.RosaMachinePoolReadyCondition)
 			rosaMachinePool.Status.Ready = true
@@ -250,19 +258,18 @@ func (r *ROSAMachinePoolReconciler) reconcileNormal(ctx context.Context,
 			if err := r.reconcileMachinePoolVersion(machinePoolScope, ocmClient, nodePool); err != nil {
 				return ctrl.Result{}, err
 			}
-
-			return ctrl.Result{}, nil
 		}
 
-		conditions.MarkFalse(rosaMachinePool,
-			expinfrav1.RosaMachinePoolReadyCondition,
-			nodePool.Status().Message(),
-			clusterv1.ConditionSeverityInfo,
-			"")
+		if err := r.reconcileProviderIDList(ctx, machinePoolScope, nodePool); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile ProviderIDList: %w", err)
+		}
 
-		machinePoolScope.Info("waiting for NodePool to become ready", "state", nodePool.Status().Message())
 		// Requeue so that status.ready is set to true when the nodepool is fully created.
-		return ctrl.Result{RequeueAfter: time.Second * 60}, nil
+		if !rosaMachinePool.Status.Ready {
+			machinePoolScope.Info("waiting for NodePool to become ready", "state", nodePool.Status().Message())
+			return ctrl.Result{RequeueAfter: time.Second * 60}, nil
+		}
+		return ctrl.Result{}, nil
 	}
 
 	npBuilder := nodePoolBuilder(rosaMachinePool.Spec, machinePool.Spec)
@@ -504,29 +511,51 @@ func nodePoolToRosaMachinePoolSpec(nodePool *cmv1.NodePool) expinfrav1.RosaMachi
 }
 
 func (r *ROSAMachinePoolReconciler) reconcileProviderIDList(ctx context.Context, machinePoolScope *scope.RosaMachinePoolScope, nodePool *cmv1.NodePool) error {
-	tags := nodePool.AWSNodePool().Tags()
-	if len(tags) == 0 {
+	nodePoolTags := infrav1.Tags(nodePool.AWSNodePool().Tags())
+	nodePoolTags.Substract(machinePoolScope.AdditionalTags())
+	if len(nodePoolTags) == 0 {
 		// can't identify EC2 instances belonging to this NodePool without tags.
 		return nil
 	}
 
-	ec2Svc := scope.NewEC2Client(machinePoolScope, machinePoolScope, &machinePoolScope.Logger, machinePoolScope.InfraCluster())
-	response, err := ec2Svc.DescribeInstancesWithContext(ctx, &ec2.DescribeInstancesInput{
-		Filters: buildEC2FiltersFromTags(tags),
+	ec2Client := scope.NewEC2Client(machinePoolScope, machinePoolScope, &machinePoolScope.Logger, machinePoolScope.InfraCluster())
+	response, err := ec2Client.DescribeInstancesWithContext(ctx, &ec2.DescribeInstancesInput{
+		Filters: buildEC2FiltersFromTags(nodePoolTags),
 	})
 	if err != nil {
 		return err
 	}
 
+	allErrs := []error{}
 	var providerIDList []string
 	for _, reservation := range response.Reservations {
 		for _, instance := range reservation.Instances {
 			providerID := scope.GenerateProviderID(*instance.Placement.AvailabilityZone, *instance.InstanceId)
 			providerIDList = append(providerIDList, providerID)
+
+			if err := r.reconcileEC2InstanceTags(instance, ec2Client, machinePoolScope); err != nil {
+				allErrs = append(allErrs, err)
+			}
 		}
 	}
 
 	machinePoolScope.RosaMachinePool.Spec.ProviderIDList = providerIDList
+
+	return kerrors.NewAggregate(allErrs)
+}
+
+func (r *ROSAMachinePoolReconciler) reconcileEC2InstanceTags(ec2Instance *ec2.Instance, ec2Client ec2iface.EC2API, machinePoolScope *scope.RosaMachinePoolScope) error {
+	currentTags := converters.TagsToMap(ec2Instance.Tags)
+
+	buildParams := &infrav1.BuildParams{
+		ResourceID: *ec2Instance.InstanceId,
+		Additional: machinePoolScope.AdditionalTags(),
+	}
+	tagsBuilder := tags.New(buildParams, tags.WithEC2(ec2Client))
+
+	if err := tagsBuilder.Ensure(currentTags); err != nil {
+		return fmt.Errorf("failed ensuring tags on instance %s: %w", *ec2Instance.InstanceId, err)
+	}
 	return nil
 }
 
