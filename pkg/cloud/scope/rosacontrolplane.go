@@ -177,10 +177,22 @@ func (s *ROSAControlPlaneScope) CredentialsSecret() *corev1.Secret {
 
 // ClusterAdminPasswordSecret returns the corev1.Secret object for the cluster admin password.
 func (s *ROSAControlPlaneScope) ClusterAdminPasswordSecret() *corev1.Secret {
+	return s.secretWithOwnerReference(fmt.Sprintf("%s-admin-password", s.Cluster.Name))
+}
+
+// ExternalAuthBootstrapKubeconfigSecret returns the corev1.Secret object for the external auth bootstrap kubeconfig.
+func (s *ROSAControlPlaneScope) ExternalAuthBootstrapKubeconfigSecret() *corev1.Secret {
+	return s.secretWithOwnerReference(fmt.Sprintf("%s-bootstrap-kubeconfig", s.Cluster.Name))
+}
+
+func (s *ROSAControlPlaneScope) secretWithOwnerReference(name string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-admin-password", s.Cluster.Name),
+			Name:      name,
 			Namespace: s.ControlPlane.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(s.ControlPlane, rosacontrolplanev1.GroupVersion.WithKind("ROSAControlPlane")),
+			},
 		},
 	}
 }
