@@ -8886,9 +8886,11 @@ string
 </em>
 </td>
 <td>
+<em>(Optional)</em>
 <p>Cluster name must be valid DNS-1035 label, so it must consist of lower case alphanumeric
 characters or &lsquo;-&rsquo;, start with an alphabetic character, end with an alphanumeric character
-and have a max length of 54 characters.</p>
+and have a max length of 54 characters. If you don&rsquo;t specify a name then a default name will be created
+based on the namespace and name of the rosa control plane.</p>
 </td>
 </tr>
 <tr>
@@ -9239,9 +9241,11 @@ string
 </em>
 </td>
 <td>
+<em>(Optional)</em>
 <p>Cluster name must be valid DNS-1035 label, so it must consist of lower case alphanumeric
 characters or &lsquo;-&rsquo;, start with an alphabetic character, end with an alphanumeric character
-and have a max length of 54 characters.</p>
+and have a max length of 54 characters. If you don&rsquo;t specify a name then a default name will be created
+based on the namespace and name of the rosa control plane.</p>
 </td>
 </tr>
 <tr>
@@ -9702,8 +9706,7 @@ private node communication with the control plane.</p>
 (<em>Appears on:</em><a href="#controlplane.cluster.x-k8s.io/v1beta2.TokenIssuer">TokenIssuer</a>)
 </p>
 <p>
-<pre><code>TokenAudience is the audience that the token was issued for.
-</code></pre>
+<p>TokenAudience is the audience that the token was issued for.</p>
 </p>
 <h3 id="controlplane.cluster.x-k8s.io/v1beta2.TokenClaimMappings">TokenClaimMappings
 </h3>
@@ -10001,6 +10004,25 @@ string
 <p>
 <p>UsernamePrefixPolicy specifies how a prefix should apply.</p>
 </p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr><td><p>&#34;&#34;</p></td>
+<td><p>NoOpinion let&rsquo;s the cluster assign prefixes.  If the username claim is email, there is no prefix
+If the username claim is anything else, it is prefixed by the issuerURL</p>
+</td>
+</tr><tr><td><p>&#34;NoPrefix&#34;</p></td>
+<td><p>NoPrefix means the username claim value will not have any  prefix</p>
+</td>
+</tr><tr><td><p>&#34;Prefix&#34;</p></td>
+<td><p>Prefix means the prefix value must be specified.  It cannot be empty</p>
+</td>
+</tr></tbody>
+</table>
 <hr/>
 <h2 id="infrastructure.cluster.x-k8s.io/v1beta1">infrastructure.cluster.x-k8s.io/v1beta1</h2>
 <p>

@@ -42,13 +42,15 @@ const (
 type RosaControlPlaneSpec struct { //nolint: maligned
 	// Cluster name must be valid DNS-1035 label, so it must consist of lower case alphanumeric
 	// characters or '-', start with an alphabetic character, end with an alphanumeric character
-	// and have a max length of 54 characters.
+	// and have a max length of 54 characters. If you don't specify a name then a default name will be created
+	// based on the namespace and name of the rosa control plane.
 	//
 	// +immutable
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf", message="rosaClusterName is immutable"
 	// +kubebuilder:validation:MaxLength:=54
 	// +kubebuilder:validation:Pattern:=`^[a-z]([-a-z0-9]*[a-z0-9])?$`
-	RosaClusterName string `json:"rosaClusterName"`
+	// +optional
+	RosaClusterName string `json:"rosaClusterName,omitempty"`
 
 	// DomainPrefix is an optional prefix added to the cluster's domain name. It will be used
 	// when generating a sub-domain for the cluster on openshiftapps domain. It must be valid DNS-1035 label

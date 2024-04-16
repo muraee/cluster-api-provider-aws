@@ -146,7 +146,18 @@ func (r *ROSAControlPlane) validateExternalAuthProviders() *field.Error {
 	return nil
 }
 
+const maxClusterNameLength = 54
+
 // Default implements admission.Defaulter.
 func (r *ROSAControlPlane) Default() {
 	SetObjectDefaults_ROSAControlPlane(r)
+
+	if r.Spec.RosaClusterName == "" {
+		name, err := GenerateClusterName(r.Name, r.Namespace, maxClusterNameLength)
+		if err != nil {
+			return
+		}
+
+		r.Spec.RosaClusterName = name
+	}
 }

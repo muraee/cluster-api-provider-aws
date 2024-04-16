@@ -618,7 +618,9 @@ spec:
                 description: Cluster name must be valid DNS-1035 label, so it must
                   consist of lower case alphanumeric characters or '-', start with
                   an alphabetic character, end with an alphanumeric character and
-                  have a max length of 54 characters.
+                  have a max length of 54 characters. If you don't specify a name
+                  then a default name will be created based on the namespace and name
+                  of the rosa control plane.
                 maxLength: 54
                 pattern: ^[a-z]([-a-z0-9]*[a-z0-9])?$
                 type: string
@@ -649,7 +651,6 @@ spec:
             - oidcID
             - region
             - rolesRef
-            - rosaClusterName
             - subnets
             - supportRoleARN
             - version
